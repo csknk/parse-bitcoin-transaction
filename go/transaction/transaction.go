@@ -53,12 +53,18 @@ func (txIn *TxIn) MarshalJSON() ([]byte, error) {
 
 func (txOut *TxOut) MarshalJSON() ([]byte, error) {
 	type Alias TxOut
+	scriptPubkeyASM, scriptPubkeyType, scriptPubkeyAddress := decodeOuputScript(txOut.ScriptPubkey)
 	return json.Marshal(&struct {
-		ScriptPubKey string `json:"script_pub_key"`
+		ScriptPubkey        string `json:"script_pubkey"`
+		ScriptPubkeyASM     string `json:"script_pubkey_asm"`
+		ScriptPubkeyType    string `json:"script_pubkey_type"`
+		ScriptPubkeyAddress string `json:"script_pubkey_address"`
 		*Alias
 	}{
-		// ScriptPubKey: scriptBuilder.String(),
-		ScriptPubKey: hex.EncodeToString(txOut.ScriptPubKey),
-		Alias:        (*Alias)(txOut),
+		ScriptPubkey:        hex.EncodeToString(txOut.ScriptPubkey),
+		ScriptPubkeyASM:     scriptPubkeyASM,
+		ScriptPubkeyType:    scriptPubkeyType,
+		ScriptPubkeyAddress: scriptPubkeyAddress,
+		Alias:               (*Alias)(txOut),
 	})
 }
