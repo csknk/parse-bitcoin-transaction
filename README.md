@@ -1,22 +1,104 @@
 # Bitcoin Transaction Parsing
 
+This is an educational project that attempts to parse Bitcoin transactions from first principles, without significant external dependencies.
+
+The objective is to decode Bitcoin transactions from raw bytes.
+
 ## Legacy Transaction Structure
 
+The legacy transaction byte mapping is as follows:
+
 Version (4 bytes)
-Input count (varint)
+Input count (compactSize integer)
 [Inputs]:
 
 - Prev txid (32 bytes)
 - Prev index (4 bytes)
-- Script length (varint)
+- Script length (compactSize integer)
 - Script (n bytes)
 - Sequence (4 bytes)
 
-Output count (varint)
+Output count (compactSize integer)
 [Outputs]:
 
 - Value (8 bytes)
-- Script length (varint)
+- Script length (compactSize integer)
 - Script (n bytes)
 
 Locktime (4 bytes)
+
+Most importantly, we need to unpack [compactSize integers][compact integers] properly. The raw transaction format and several peer-to-peer network messages use a type of variable-length integer to indicate the number of bytes in a following piece of data. It is a compact way of representing integers of variable size whilst minimising the space taken up. For example, if we knew that the largest integer that we would handle could be represented by 8 bytes, we could just allocate 8 bytes to this field. If most of the time the field encodes numbers less than 255 (which can be represented in a single byte), then most of the time we would be wasting 7 bytes on every such value.
+
+Bitcoin has multiple methods for encoding variable length integers, with different methods used in different parts of the codebase.
+
+The raw transaction format and peer-to-peer network messages within Bitcoin use a type of variable length integer encoding known as "compactSize". This involves prepending integers with a byte that indicates integer length for numbers greater than 252.
+
+Used in the transaction format, compactSize integers format part of the Bitcoin consensus rules.
+
+Bitcoin has a unique way of encoding compactSize integers in the context of transactions as follows:
+
+| Prefix   | Range (decimal)        | Encoding                                            | Total bytes |
+| :------- | :--------------------- | :-------------------------------------------------- | :---------- |
+| `< 0xfd` | 0 – 252                | The value itself (1 byte)                           | 1           |
+| `0xfd`   | 253 – 65,535           | `0xfd` followed by 2-byte **little-endian** integer | 3           |
+| `0xfe`   | 65,536 – 4,294,967,295 | `0xfe` + 4-byte **little-endian** integer           | 5           |
+| `0xff`   | ≥ 4,294,967,296        | `0xff` + 8-byte **little-endian** integer           | 9           |
+
+[compact integers]: https://developer.bitcoin.org/reference/transactions.html#compactsize-unsigned-integers
+
+## Parse Bitcoin Transactions in Production
+
+If you want to parse a Bitcoin transaction, you should probably use btcd something like this:
+
+```go
+package main
+
+import (
+ "bytes"
+ "encoding/hex"
+ "fmt"
+ "log"
+ "strings"
+
+ "github.com/btcsuite/btcd/wire"
+)
+
+func main() {
+ // Example raw transaction (mainnet P2PKH)
+ rawTx := "010000000104dde43b0e4724f1e3b45782a9bfbcc91ea764c7cb1c245fba" +
+  "1fefa175c3a5d0010000006a4730440220519f7867349790ee441e83e545afbd25" +
+  "b954a34e0733cd4da3b5f1e5588625050220166730d053c3672973bcb2bb1a977b" +
+  "747837023b647e3af2ac9c15728b0681da01210236ccb7ee3a9f154127f384a058" +
+  "70c4fd86a8727eab7316f1449a0b9e65bfd90dffffffff025d3601000000000019" +
+  "76a91478364a559841329304188cd791ad9dabbb2a3fdb88ac605b030000000000" +
+  "1976a914064e0aa817486573f4c2de09f927697e1e6f233f88ac00000000"
+
+ // Decode hex to bytes
+ txBytes, err := hex.DecodeString(rawTx)
+ if err != nil {
+  log.Fatalf("hex decode failed: %v", err)
+ }
+
+ // Deserialize into a wire.MsgTx
+ var msgTx wire.MsgTx
+ if err := msgTx.DeserializeNoWitness(hex.NewDecoder(strings.NewReader(rawTx))); err != nil {
+  log.Fatalf("tx deserialize failed: %v", err)
+ }
+
+ // OR simply:
+ if err := msgTx.Deserialize(bytes.NewReader(txBytes)); err != nil {
+  log.Fatalf("Deserialize failed: %v", err)
+ }
+
+ // Print fields
+ fmt.Printf("Version: %d\n", msgTx.Version)
+ fmt.Printf("Inputs: %d\n", len(msgTx.TxIn))
+ fmt.Printf("Outputs: %d\n", len(msgTx.TxOut))
+ fmt.Printf("LockTime: %d\n", msgTx.LockTime)
+
+ for i, output := range msgTx.TxOut {
+  fmt.Printf("output %d: %#v\n", i, output)
+ }
+}
+
+```

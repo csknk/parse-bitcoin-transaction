@@ -40,14 +40,19 @@ func (t *Transaction) Parse() error {
 // MarshalJSON customizes the JSON marshaling for TxIn.
 func (txIn *TxIn) MarshalJSON() ([]byte, error) {
 	type Alias TxIn // Create an alias to avoid recursion
+	scriptSigASM, signature, pubKey := decodeScriptSig(txIn.ScriptSig)
 	return json.Marshal(&struct {
-		PrevTxIDHex string `json:"prev_tx_id"`
-		ScriptSig   string `json:"script_sig"`
+		PrevTxIDHex  string `json:"prev_tx_id"`
+		Signature    string `json:"signature"`
+		ScriptSigAsm string `json:"script_sig_asm"`
+		ScriptPubkey string `json:"script_pubkey"`
 		*Alias
 	}{
-		PrevTxIDHex: hex.EncodeToString(txIn.PrevTxID[:]),
-		ScriptSig:   hex.EncodeToString(txIn.ScriptSig),
-		Alias:       (*Alias)(txIn),
+		PrevTxIDHex:  hex.EncodeToString(txIn.PrevTxID[:]),
+		Signature:    hex.EncodeToString(signature),
+		ScriptSigAsm: scriptSigASM,
+		ScriptPubkey: hex.EncodeToString(pubKey),
+		Alias:        (*Alias)(txIn),
 	})
 }
 

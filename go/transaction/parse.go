@@ -153,6 +153,33 @@ func decodeOuputScript(script []byte) (string, string, string) {
 	return asm.String(), scriptType, ""
 }
 
+func decodeScriptSig(scriptSig []byte) (scriptSigASM string, signature, pubKey []byte) {
+	var asm strings.Builder
+	for i := 0; i < len(scriptSig); i++ {
+		if i > 0 {
+			asm.WriteString(" ")
+		}
+		opcode := scriptSig[i]
+		// TODO: expand these rules to account for all tx types
+		if opcode >= 0x01 && opcode <= 0x4b {
+			asm.WriteString(fmt.Sprintf("OP_PUSHBYTES_%d", opcode))
+		}
+
+		pushData := scriptSig[i+1 : i+int(opcode)+1]
+		asm.WriteString(" ")
+		asm.WriteString(hex.EncodeToString(pushData))
+		if i == 0 {
+			signature = pushData
+		}
+		if i > 0 && opcode == 0x21 || opcode == 0x40 {
+			pubKey = pushData
+		}
+		i = i + int(opcode)
+	}
+	scriptSigASM = asm.String()
+	return scriptSigASM, signature, pubKey
+}
+
 // readVarInt reads the encoded VarInt returns the encoded integer as a uint64
 // If first byte < 0xfd → it's the value
 // 0xfd → next 2 bytes (uint16)
