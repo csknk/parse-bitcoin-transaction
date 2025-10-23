@@ -19,73 +19,13 @@ func ParseTx(r io.Reader) (*Transaction, error) {
 		return nil, err
 	}
 
-	readInput := func() (TxIn, error) {
-		prevTxID := make([]byte, 32)
-		if err = binary.Read(r, binary.LittleEndian, prevTxID); err != nil {
-			return TxIn{}, fmt.Errorf("error getting previous Tx ID: %w", err)
-		}
-
-		// The prevTxID field is stored in little-endian format in raw transactions.
-		// To get the canonical txid (as shown in block explorers or for lookup via RPC),
-		// we must reverse the byte order to convert it to big-endian.
-		prevTxIDReversed := reverseByteSlice(prevTxID)
-
-		var vout uint32
-		if err = binary.Read(r, binary.LittleEndian, &vout); err != nil {
-			return TxIn{}, err
-		}
-
-		scriptLength, scriptLengthErr := readVarInt(r)
-		if err != nil {
-			return TxIn{}, scriptLengthErr
-		}
-
-		scriptSig := make([]byte, scriptLength)
-		if err = binary.Read(r, binary.LittleEndian, scriptSig); err != nil {
-			return TxIn{}, err
-		}
-
-		var sequence uint32
-		if err = binary.Read(r, binary.LittleEndian, &sequence); err != nil {
-			return TxIn{}, err
-		}
-
-		return TxIn{
-			PrevTxID:  [32]byte(prevTxIDReversed),
-			Vout:      vout,
-			ScriptSig: scriptSig,
-			Sequence:  sequence,
-		}, nil
-	}
-
 	inputs := []TxIn{}
 	for i := range nInputs {
-		input, inputErr := readInput()
+		input, inputErr := readInput(r)
 		if inputErr != nil {
 			return nil, fmt.Errorf("can't parse input %d: %w", i, inputErr)
 		}
 		inputs = append(inputs, input)
-	}
-
-	readOutput := func() (TxOut, error) {
-		var value uint64
-		if err = binary.Read(r, binary.LittleEndian, &value); err != nil {
-			return TxOut{}, err
-		}
-
-		scriptLength, scriptLengthErr := readVarInt(r)
-		if err != nil {
-			return TxOut{}, scriptLengthErr
-		}
-		script := make([]byte, scriptLength)
-		if err = binary.Read(r, binary.LittleEndian, script); err != nil {
-			return TxOut{}, err
-		}
-
-		return TxOut{
-			Value:        value,
-			ScriptPubkey: script,
-		}, nil
 	}
 
 	nOutputs, err := readVarInt(r)
@@ -94,7 +34,7 @@ func ParseTx(r io.Reader) (*Transaction, error) {
 	}
 	outputs := []TxOut{}
 	for i := range nOutputs {
-		output, outputErr := readOutput()
+		output, outputErr := readOutput(r)
 		if outputErr != nil {
 			return nil, fmt.Errorf("can't parse output %d: %w", i, outputErr)
 		}
@@ -180,11 +120,16 @@ func decodeScriptSig(scriptSig []byte) (scriptSigASM string, signature, pubKey [
 	return scriptSigASM, signature, pubKey
 }
 
-// readVarInt reads the encoded VarInt returns the encoded integer as a uint64
-// If first byte < 0xfd → it's the value
-// 0xfd → next 2 bytes (uint16)
-// 0xfe → next 4 bytes (uint32)
-// 0xff → next 8 bytes (uint64)
+// readVarInt reads an encoded compactSize variable-length integer from an input stream (`io.Reader`) and returns the decoded value as a `uint64`. The function follows the Bitcoin protocol for encoding variable-length integers:
+//
+// - If the first byte is less than `0xfd`, it represents the integer value directly.
+// - If the first byte is `0xfd`, the next 2 bytes are read as a `uint16`.
+// - If the first byte is `0xfe`, the next 4 bytes are read as a `uint32`.
+// - If the first byte is `0xff`, the next 8 bytes are read as a `uint64`.
+//
+// The function reads the first byte from the input stream and then switches over its value to determine how many bytes to read next. It reads the appropriate number of bytes into an integer variable of the corresponding size (`uint16`, `uint32`, or `uint64`) and then returns the value as a `uint64`.
+//
+// If any errors occur during reading or decoding, the function returns an error.
 func readVarInt(r io.Reader) (uint64, error) {
 	var first uint8
 	if err := binary.Read(r, binary.LittleEndian, &first); err != nil {
@@ -218,6 +163,67 @@ func readVarInt(r io.Reader) (uint64, error) {
 	}
 }
 
+func readInput(r io.Reader) (TxIn, error) {
+	prevTxID := make([]byte, 32)
+	if err := binary.Read(r, binary.LittleEndian, prevTxID); err != nil {
+		return TxIn{}, fmt.Errorf("error getting previous Tx ID: %w", err)
+	}
+
+	// The prevTxID field is stored in little-endian format in raw transactions.
+	// To get the canonical txid (as shown in block explorers or for lookup via RPC),
+	// we must reverse the byte order to convert it to big-endian.
+	prevTxIDReversed := reverseByteSlice(prevTxID)
+
+	var vout uint32
+	if err := binary.Read(r, binary.LittleEndian, &vout); err != nil {
+		return TxIn{}, err
+	}
+
+	scriptLength, err := readVarInt(r)
+	if err != nil {
+		return TxIn{}, err
+	}
+
+	scriptSig := make([]byte, scriptLength)
+	if err = binary.Read(r, binary.LittleEndian, scriptSig); err != nil {
+		return TxIn{}, err
+	}
+
+	var sequence uint32
+	if err = binary.Read(r, binary.LittleEndian, &sequence); err != nil {
+		return TxIn{}, err
+	}
+
+	return TxIn{
+		PrevTxID:  [32]byte(prevTxIDReversed),
+		Vout:      vout,
+		ScriptSig: scriptSig,
+		Sequence:  sequence,
+	}, nil
+}
+
+func readOutput(r io.Reader) (TxOut, error) {
+	var value uint64
+	if err := binary.Read(r, binary.LittleEndian, &value); err != nil {
+		return TxOut{}, err
+	}
+
+	scriptLength, err := readVarInt(r)
+	if err != nil {
+		return TxOut{}, err
+	}
+	script := make([]byte, scriptLength)
+	if err = binary.Read(r, binary.LittleEndian, script); err != nil {
+		return TxOut{}, err
+	}
+
+	return TxOut{
+		Value:        value,
+		ScriptPubkey: script,
+	}, nil
+}
+
+// reverseByteSlice
 func reverseByteSlice(prevTxID []byte) []byte {
 	prevTxIDReversed := make([]byte, 32)
 	for i, j := len(prevTxID)-1, 0; i >= 0; i, j = i-1, j+1 {

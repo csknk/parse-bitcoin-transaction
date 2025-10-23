@@ -4,38 +4,54 @@ This is an educational project that attempts to parse Bitcoin transactions from 
 
 The objective is to decode Bitcoin transactions from raw bytes.
 
+## Overall Approach
+
+- Define suitable data structures
+- Read binary data sequentially, populating data structures @
+- Helper functions: determine field sizes based on CompactSize integers
+-
+
 ## Legacy Transaction Structure
 
 The legacy transaction byte mapping is as follows:
 
 Version (4 bytes)
-Input count (compactSize integer)
+Input count (CompactSize integer)
 [Inputs]:
 
 - Prev txid (32 bytes)
 - Prev index (4 bytes)
-- Script length (compactSize integer)
+- Script length (CompactSize integer)
 - Script (n bytes)
 - Sequence (4 bytes)
 
-Output count (compactSize integer)
+Output count (CompactSize integer)
 [Outputs]:
 
 - Value (8 bytes)
-- Script length (compactSize integer)
+- Script length (CompactSize integer)
 - Script (n bytes)
 
 Locktime (4 bytes)
 
-Most importantly, we need to unpack [compactSize integers][compact integers] properly. The raw transaction format and several peer-to-peer network messages use a type of variable-length integer to indicate the number of bytes in a following piece of data. It is a compact way of representing integers of variable size whilst minimising the space taken up. For example, if we knew that the largest integer that we would handle could be represented by 8 bytes, we could just allocate 8 bytes to this field. If most of the time the field encodes numbers less than 255 (which can be represented in a single byte), then most of the time we would be wasting 7 bytes on every such value.
+## CompactSize Variable Length Integers
 
 Bitcoin has multiple methods for encoding variable length integers, with different methods used in different parts of the codebase.
 
-The raw transaction format and peer-to-peer network messages within Bitcoin use a type of variable length integer encoding known as "compactSize". This involves prepending integers with a byte that indicates integer length for numbers greater than 252.
+The raw transaction format and several peer-to-peer network messages use a type of variable-length integer to indicate the number of bytes in a following piece of data. This provides a compact way of representing integers of variable size whilst minimising the space taken up. For example, if we knew that the largest integer that we would handle could be represented by 8 bytes, we could just allocate 8 bytes to this field. If most of the time the field encodes numbers less than 255 (which can be represented in a single byte), then most of the time we would be wasting 7 bytes on every such value.
 
-Used in the transaction format, compactSize integers format part of the Bitcoin consensus rules.
+In the context of decoding a Bitcoin transaction, the encoding protocol used to encode variable length integers is known as [CompactSize][compact integers]. This involves prepending(prefixing) integers with a byte that indicates integer length for numbers greater than 252.
 
-Bitcoin has a unique way of encoding compactSize integers in the context of transactions as follows:
+When parsing a transaction, the number of inputs is specified by a CompactSize encoded integer. Once decoded, the parser knows how many inputs to process.
+
+1. The transaction data starts with the version number.
+2. Next, a CompactSize encoded integer specifies the number of inputs.
+3. The CompactSize integer is at least 1 byte and may be as large as 9 bytes.
+4. The parser reads that many inputs, each of which has its own structure.
+5. Following the inputs, another CompactSize encoded integer specifies the number of outputs.
+6. The parser then reads the specified number of outputs.
+
+### CompactSize Encoding
 
 | Prefix   | Range (decimal)        | Encoding                                            | Total bytes |
 | :------- | :--------------------- | :-------------------------------------------------- | :---------- |

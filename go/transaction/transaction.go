@@ -46,12 +46,14 @@ func (txIn *TxIn) MarshalJSON() ([]byte, error) {
 		Signature    string `json:"signature"`
 		ScriptSigAsm string `json:"script_sig_asm"`
 		ScriptPubkey string `json:"script_pubkey"`
+		ScriptSigHex string `json:"script_sig_hex"`
 		*Alias
 	}{
 		PrevTxIDHex:  hex.EncodeToString(txIn.PrevTxID[:]),
 		Signature:    hex.EncodeToString(signature),
 		ScriptSigAsm: scriptSigASM,
 		ScriptPubkey: hex.EncodeToString(pubKey),
+		ScriptSigHex: hex.EncodeToString(txIn.ScriptSig),
 		Alias:        (*Alias)(txIn),
 	})
 }
