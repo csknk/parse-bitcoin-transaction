@@ -3,6 +3,7 @@ module github.com/csknk/parse-bitcoin-transaction
 go 1.23.6
 
 require (
+	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/btcsuite/btcutil v1.0.2
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/viper v1.21.0

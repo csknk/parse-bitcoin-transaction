@@ -24,6 +24,13 @@ const (
 	P2TR   ScriptType = "p2tr"
 )
 
+type witnessVersion byte
+
+const (
+	WitnessV0 witnessVersion = 0x00
+	WitnessV1 witnessVersion = 0x01
+)
+
 func extractScriptType(script []byte) (ScriptType, error) {
 	switch {
 
@@ -36,7 +43,7 @@ func extractScriptType(script []byte) (ScriptType, error) {
 	// P2SH: a9, 14,<20>,87
 	case len(script) == 23 &&
 		slicesEqual(script[:2], []byte{0xa9, 0x14}) &&
-		script[24] == 0x87:
+		script[22] == 0x87:
 		return P2SH, nil
 
 	// P2WPKH: 00,14,<20>
@@ -88,22 +95,51 @@ func extractAddress(script []byte, isMainnet bool) (string, string, error) {
 		hrp = "tb"
 	}
 	switch scriptType {
+
 	case P2WPKH, P2WSH:
-		witnessProgram := script[:2]
-		addr, err := bech32.Encode(hrp, 0x00, witnessProgram)
+		addr, err := p2wAddress(script, hrp)
 		if err != nil {
-			return "", "", fmt.Errorf("encoding error: %w", err)
+			return "", "", err
 		}
 		return addr, string(scriptType), nil
+
 	case P2TR:
-		xonly := script[:2]
-		addr, err := bech32.EncodeM(hrp, 0x01, xonly)
+		addr, err := p2trAddress(script, hrp)
 		if err != nil {
 			return "", "", err
 		}
 		return addr, string(scriptType), nil
 	}
 	return "", "", nil
+}
+
+func p2wAddress(script []byte, hrp string) (string, error) {
+	return bech32Address(script, hrp, byte(WitnessV0))
+}
+
+func p2trAddress(script []byte, hrp string) (string, error) {
+	return bech32Address(script, hrp, byte(WitnessV1))
+}
+
+func bech32Address(script []byte, hrp string, witnessVersion byte) (string, error) {
+	payload := script[2:]
+	data := []byte{witnessVersion}
+	converted, err := bech32.ConvertBits(payload, 8, 5, true)
+	if err != nil {
+		return "", err
+	}
+
+	data = append(data, converted...)
+	encoder := bech32.Encode
+	if witnessVersion != byte(0x00) {
+		encoder = bech32.EncodeM
+	}
+	addr, err := encoder(hrp, data)
+	if err != nil {
+		return "", fmt.Errorf("encoding error: %w", err)
+	}
+
+	return addr, nil
 }
 
 func doubleSHA256(b []byte) []byte {
