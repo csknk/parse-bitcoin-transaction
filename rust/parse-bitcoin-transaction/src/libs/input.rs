@@ -1,17 +1,10 @@
-#![allow(unused)]
-use crate::libs::utils::serialize_as_hex;
-use crate::libs::utils::serialize_as_hex_reversed;
-use std::{
-    error::Error,
-    fmt::{Display, Write},
-};
-use std::{
-    fmt::write,
-    io::{self, Cursor, Read},
-};
+use crate::libs::utils::{opcode_name, serialize_as_hex, serialize_as_hex_reversed};
+use std::fmt::Write;
+use std::io::{self, Cursor, Read};
+use std::{error::Error, fmt::Display};
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 
 use crate::libs::utils::read_varint;
 
@@ -33,29 +26,29 @@ impl AsRef<[u8]> for ScriptSig {
     }
 }
 
-impl ScriptSig {
-    pub fn value(&self) -> &Vec<u8> {
-        &self.0
-    }
-}
-
-#[derive(Debug)]
-struct ScriptSigDecoded<'a> {
-    asm: String,
-    pushes: Vec<&'a [u8]>,
-}
-
 #[derive(Debug)]
 pub enum DecodeScriptSigError {
-    Read(std::io::Error),
+    IO(std::io::Error),
     Fmt(std::fmt::Error),
+    UnexpectedEof { needed: usize, remaining: usize },
+    PushLengthTooLarge { len: usize, max: usize },
 }
 
 impl Display for DecodeScriptSigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeScriptSigError::Read(e) => write!(f, "read error: {e}"),
+            DecodeScriptSigError::IO(e) => write!(f, "read error: {e}"),
             DecodeScriptSigError::Fmt(e) => write!(f, "formatting error: {e}"),
+            DecodeScriptSigError::UnexpectedEof { needed, remaining } => write!(
+                f,
+                "unexpected EOF: needed {needed} bytes, only {remaining} remaining"
+            ),
+            DecodeScriptSigError::PushLengthTooLarge { len, max } => {
+                write!(
+                    f,
+                    "push length too large: needed {len}, max length is {max}"
+                )
+            }
         }
     }
 }
@@ -63,15 +56,18 @@ impl Display for DecodeScriptSigError {
 impl Error for DecodeScriptSigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            DecodeScriptSigError::Read(error) => Some(error),
+            DecodeScriptSigError::IO(error) => Some(error),
             DecodeScriptSigError::Fmt(error) => Some(error),
+            // Terminal domain errors
+            DecodeScriptSigError::UnexpectedEof { .. } => None,
+            DecodeScriptSigError::PushLengthTooLarge { .. } => None,
         }
     }
 }
 
 impl From<std::io::Error> for DecodeScriptSigError {
     fn from(value: std::io::Error) -> Self {
-        DecodeScriptSigError::Read(value)
+        DecodeScriptSigError::IO(value)
     }
 }
 
@@ -102,9 +98,7 @@ pub struct TxInView<'a> {
 
 impl<'a> From<&'a TxIn> for TxInView<'a> {
     fn from(tx_input: &'a TxIn) -> Self {
-        let script_sig_asm = decode_script_sig(tx_input.script_sig.as_ref())
-            .ok()
-            .map(|decoded| decoded.asm);
+        let script_sig_asm = decode_script_sig(tx_input.script_sig.as_ref()).ok();
 
         Self {
             prev_tx_id: &tx_input.prev_tx_id,
@@ -151,31 +145,99 @@ pub fn read_input<R: Read>(r: &mut R) -> io::Result<TxIn> {
     })
 }
 
-/// decode_script
-/// TODO: Utilise same approach [start..end] for the other cursor based function that decodes output
-/// script pubkey
-fn decode_script_sig<'a>(script: &'a [u8]) -> Result<ScriptSigDecoded<'a>, DecodeScriptSigError> {
-    let mut pushes = Vec::new();
-    let mut cursor = Cursor::new(script);
-    let mut asm = String::new();
-    let mut first = true;
-    while (cursor.position() as usize) < script.len() {
-        if !first {
-            asm.push(' ');
-        }
-        let opcode = cursor.read_u8()?;
-        if (0x01..0x4b).contains(&opcode) {
-            write!(&mut asm, "OP_PUSHBYTES_{}", opcode)?;
-        }
+#[derive(Debug)]
+pub(crate) enum ScriptElement<'a> {
+    Op { opcode: u8 },
+    Push { opcode: u8, data: &'a [u8] },
+}
 
-        let start = cursor.position() as usize;
-        let len = opcode as usize;
-        let end = start + len;
-        pushes.push(&script[start..end]);
-        write!(asm, " {}", hex::encode(&script[start..end]));
-        cursor.set_position(end as u64);
-        first = false;
+/// decode_script
+fn parse_script<'a>(script: &'a [u8]) -> Result<Vec<ScriptElement<'a>>, DecodeScriptSigError> {
+    let mut cursor = Cursor::new(script);
+    let mut elements = Vec::new();
+
+    while (cursor.position() as usize) < script.len() {
+        let opcode = cursor.read_u8()?;
+
+        let push_len = match opcode {
+            0x01..=0x4b => Some(opcode as usize),
+            0x4c => {
+                ensure_remaining(&cursor, script.len(), 1)?;
+                Some(cursor.read_u8()? as usize)
+            } // 1,
+            0x4d => {
+                ensure_remaining(&cursor, script.len(), 2)?;
+                Some(cursor.read_u16::<LittleEndian>()? as usize)
+            } // 2,
+            0x4e => {
+                ensure_remaining(&cursor, script.len(), 4)?;
+                Some(cursor.read_u32::<LittleEndian>()? as usize)
+            } // 4,
+            _ => None,
+        };
+        if let Some(len) = push_len {
+            let start = cursor.position() as usize;
+            let end = start + len;
+            if end > script.len() {
+                return Err(DecodeScriptSigError::PushLengthTooLarge {
+                    len,
+                    max: script.len() - start,
+                });
+            }
+            elements.push(ScriptElement::Push {
+                opcode,
+                data: &script[start..end],
+            });
+
+            cursor.set_position(end as u64);
+        } else {
+            elements.push(ScriptElement::Op { opcode });
+        }
     }
 
-    Ok(ScriptSigDecoded { asm, pushes })
+    Ok(elements)
+}
+
+fn decode_script_sig<'a>(script: &'a [u8]) -> Result<String, DecodeScriptSigError> {
+    let elements = parse_script(script)?;
+    Ok(script_elements_to_asm(&elements)?)
+}
+
+fn script_elements_to_asm(elements: &[ScriptElement<'_>]) -> Result<String, std::fmt::Error> {
+    let mut asm = String::new();
+
+    for (i, element) in elements.iter().enumerate() {
+        if i > 0 {
+            asm.push(' ');
+        }
+        match element {
+            ScriptElement::Op { opcode } => {
+                write!(asm, "{}", opcode_name(*opcode))?;
+            }
+            ScriptElement::Push {
+                opcode: opcode @ 0x01..=0x4b,
+                data,
+            } => {
+                write!(asm, "OP_PUSHBYTES_{} {}", *opcode, hex::encode(data))?;
+            }
+
+            ScriptElement::Push { opcode, data } => {
+                write!(asm, "{} {}", opcode_name(*opcode), hex::encode(data))?;
+            }
+        }
+    }
+    Ok(asm)
+}
+
+fn ensure_remaining(
+    cursor: &Cursor<&[u8]>,
+    script_len: usize,
+    needed: usize,
+) -> Result<(), DecodeScriptSigError> {
+    let remaining = script_len - cursor.position() as usize;
+
+    if remaining < needed {
+        return Err(DecodeScriptSigError::UnexpectedEof { needed, remaining });
+    }
+    Ok(())
 }
