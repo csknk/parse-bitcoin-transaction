@@ -54,15 +54,17 @@ func ParseTx(r io.Reader) (*Transaction, error) {
 	}, nil
 }
 
-// decodeOuputScript decodes the ScriptPubkeyASM, ScriptPubkeyType and ScriptPubkeyAddress from
-// the ScriptPubkey.
-// ScriptPubkeyASM is the human-readable assembly representation of the ScriptPubkey.
-// ScriptPubkeyType is a string that categorizes the type of script used in the
-// ScriptPubkey. Common types include 'pubkeyhash', 'scripthash', 'multisig', 'nulldata'
-// ScriptPubkeyAddress is the Bitcoin address associated with the ScriptPubkey, if
-// applicable. Not all script types will result in a straightforward address. For
-// example, 'nulldata' scripts (used for OP_RETURN outputs) do not have an associated
-// address.
+// decodeOuputScript decodes the ScriptPubkeyASM, ScriptPubkeyType and
+// ScriptPubkeyAddress from the ScriptPubkey. ScriptPubkeyASM is the
+// human-readable assembly representation of the ScriptPubkey. ScriptPubkeyType
+// is a string that categorizes the type of script used in the ScriptPubkey.
+// Common types include 'pubkeyhash', 'scripthash', 'multisig', 'nulldata'
+// ScriptPubkeyAddress is the Bitcoin address associated with the ScriptPubkey,
+// if applicable.
+//
+// Note: Not all script types will result in a straightforward address. For
+// example, 'nulldata' scripts (used for OP_RETURN outputs) do not have an
+// associated address.
 func decodeOuputScript(script []byte) (string, string, string) {
 	var asm strings.Builder
 	var hashedScriptLenByte bool
@@ -90,7 +92,11 @@ func decodeOuputScript(script []byte) (string, string, string) {
 		}
 		asm.WriteString(opcodes[opcode])
 	}
-	return asm.String(), scriptType, ""
+	addr, _, err := extractAddress(script, true)
+	if err != nil {
+		return "", "", ""
+	}
+	return asm.String(), scriptType, addr
 }
 
 func decodeScriptSig(scriptSig []byte) (scriptSigASM string, signature, pubKey []byte) {
@@ -120,16 +126,23 @@ func decodeScriptSig(scriptSig []byte) (scriptSigASM string, signature, pubKey [
 	return scriptSigASM, signature, pubKey
 }
 
-// readVarInt reads an encoded compactSize variable-length integer from an input stream (`io.Reader`) and returns the decoded value as a `uint64`. The function follows the Bitcoin protocol for encoding variable-length integers:
+// readVarInt reads an encoded compactSize variable-length integer from an
+// input stream (`io.Reader`) and returns the decoded value as a `uint64`. The
+// function follows the Bitcoin protocol for encoding variable-length integers:
 //
 // - If the first byte is less than `0xfd`, it represents the integer value directly.
 // - If the first byte is `0xfd`, the next 2 bytes are read as a `uint16`.
 // - If the first byte is `0xfe`, the next 4 bytes are read as a `uint32`.
 // - If the first byte is `0xff`, the next 8 bytes are read as a `uint64`.
 //
-// The function reads the first byte from the input stream and then switches over its value to determine how many bytes to read next. It reads the appropriate number of bytes into an integer variable of the corresponding size (`uint16`, `uint32`, or `uint64`) and then returns the value as a `uint64`.
+// The function reads the first byte from the input stream and then switches
+// over its value to determine how many bytes to read next. It reads the
+// appropriate number of bytes into an integer variable of the corresponding
+// size (`uint16`, `uint32`, or `uint64`) and then returns the value as a
+// `uint64`.
 //
-// If any errors occur during reading or decoding, the function returns an error.
+// If any errors occur during reading or decoding, the function returns an
+// error.
 func readVarInt(r io.Reader) (uint64, error) {
 	var first uint8
 	if err := binary.Read(r, binary.LittleEndian, &first); err != nil {

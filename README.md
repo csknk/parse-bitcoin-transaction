@@ -62,6 +62,10 @@ When parsing a transaction, the number of inputs is specified by a CompactSize e
 
 [compact integers]: https://developer.bitcoin.org/reference/transactions.html#compactsize-unsigned-integers
 
+## Extraction of Address From Script Bytes
+
+Where the output types are standard (like P2PKH, P2SH, P2WPKH & P2WSH), address derivation is well-defined. We can use specific, recognizable script templates to extract the address.
+
 ## Parse Bitcoin Transactions in Production
 
 If you want to parse a Bitcoin transaction, you should probably use btcd something like this:
