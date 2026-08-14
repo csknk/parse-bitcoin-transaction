@@ -81,11 +81,11 @@ func decodeOuputScript(script []byte) (string, string, string) {
 			hashedScriptLenByte = true
 		}
 		if hashedScriptLenByte && opcode >= 0x01 && opcode <= 0x4b {
-			asm.WriteString(fmt.Sprintf("OP_PUSHBYTES_%d", opcode))
+			fmt.Fprintf(&asm, "OP_PUSHBYTES_%d", opcode)
 			hashedKeyLength := int(opcode)
 
 			pubkey := hex.EncodeToString(script[i+1 : i+hashedKeyLength+1])
-			asm.WriteString(fmt.Sprintf(" %s", pubkey))
+			fmt.Fprintf(&asm, " %s", pubkey)
 			hashedScriptLenByte = false
 			i = i + hashedKeyLength
 			continue
@@ -108,7 +108,7 @@ func decodeScriptSig(scriptSig []byte) (scriptSigASM string, signature, pubKey [
 		opcode := scriptSig[i]
 		// TODO: expand these rules to account for all tx types
 		if opcode >= 0x01 && opcode <= 0x4b {
-			asm.WriteString(fmt.Sprintf("OP_PUSHBYTES_%d", opcode))
+			fmt.Fprintf(&asm, "OP_PUSHBYTES_%d", opcode)
 		}
 
 		pushData := scriptSig[i+1 : i+int(opcode)+1]
@@ -176,6 +176,13 @@ func readVarInt(r io.Reader) (uint64, error) {
 	}
 }
 
+// readInput reads and unpacks the input data from the provided io.Reader.
+// The function reads the previous transaction ID (32 bytes), vout (4 bytes), script length (variable length),
+// script signature (variable length), and sequence number (4 bytes) from the reader.
+// The prevTxID field is stored in little-endian format in raw transactions,
+// so it needs to be reversed to convert it to big-endian for canonical txid.
+// The unpacked data is used to create and return a TxIn struct.
+// If any error occurs during the unpacking process, an error is returned along with the TxIn struct.
 func readInput(r io.Reader) (TxIn, error) {
 	prevTxID := make([]byte, 32)
 	if err := binary.Read(r, binary.LittleEndian, prevTxID); err != nil {
